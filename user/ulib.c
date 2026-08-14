@@ -97,8 +97,9 @@ stat(const char *n, struct stat *st)
   return r;
 }
 
+// 作用：将字符串转为整数
 int
-atoi(const char *s)
+atoi(const char *s) 
 {
   int n;
 
