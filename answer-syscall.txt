@@ -1,0 +1,29 @@
+One: Looking at the backtrace output, which function called syscall? 
+Answer: usertrap() (at kernel/trap.c:68) called syscall().
+
+Two: What is the value of p->trapframe->a7 and what does that value represent? 
+Answer: p->trapframe->a7 = 15 (0xf), sys_open — the system call number for opening a file.
+
+Three: What was the previous mode that the CPU was in? 
+Answer: User mode.
+
+Four: Write down the assembly instruction the kernel is panicing at. Which register corresponds to the variable num? 
+Answer: 1. Assembly instruction：use `x/i $pc` in gdb to print the instruction at program counter where panic occurs. Write that instruction down.
+2. For variable `num`: check gdb `info locals` or disassembly output to find which register holds `num`'s value.
+
+Five: Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in scause above? 
+Operating Behavior: 
+For example, replace the statement num = p->trapframe->a7; 
+with num = * (int *) 0; this occurs a segmentation fault.(make qemu: scause=0xd sepc=0x80001bfe stval=0x0 panic: kerneltrap)
+
+Answer: he kernel crashes because it dereferences a NULL pointer, accessing virtual address `0`. Address 0 is not mapped in the kernel address space (Figure 3‑3).
+The `scause` CSR confirms this: `scause` holds the value for supervisor‑mode page‑fault (13 for load‑page‑fault, 15 for store‑page‑fault). The `stval` register contains `0`, showing the faulting virtual address is zero.
+
+Six: What is the name of the process that was running when the kernel paniced? What is its process id (pid)? 
+Operating Behavior: 
+num = p->trapframe->a7; with num = * (int *) 0; (make qemu: scause=0xd sepc=0x80001bfe stval=0x0 panic: kerneltrap)
+set $p = myproc()
+p $p->name "init", '\000
+p $p->pid 1
+
+Answer: The running process when panic occurred is `init`, pid = 1. We retrieve this from `myproc()`, inspecting `p->name` and `p->pid` members of struct proc.

@@ -81,6 +81,8 @@ strncpy(char *s, const char *t, int n)
 }
 
 // Like strncpy but guaranteed to NUL-terminate.
+// **安全字符串拷贝，把源字符串`t`复制到`s`缓冲区，最多拷贝`n‑1`个字符，
+// 最后强制补上字符串结束符`\0`，防止缓冲区溢出。类似标准库`strncpy`的改良版本**。
 char*
 safestrcpy(char *s, const char *t, int n)
 {
@@ -91,7 +93,7 @@ safestrcpy(char *s, const char *t, int n)
     return os;
   while(--n > 0 && (*s++ = *t++) != 0)
     ;
-  *s = 0;
+  *s = 0; // **把s缓冲区剩余位置补0**。
   return os;
 }
 

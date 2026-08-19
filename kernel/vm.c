@@ -107,6 +107,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
+        
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
@@ -403,7 +404,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 }
 
 // Copy a null-terminated string from user to kernel.
-// Copy bytes to dst from virtual address srcva in a given page table,
+// Copy bytes to dst from virtual address srcva in a given page table, 复制字节到dst从虚拟地址srcva在给定页表中。
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 int
