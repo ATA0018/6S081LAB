@@ -133,7 +133,16 @@ kexec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = ulib.c:start()
   p->trapframe->sp = sp; // initial stack pointer
+
+  // Unmap USYSCALL from old page table (don't free physical page, it's still in use).
+  uvmunmap(oldpagetable, USYSCALL, 1, 0);
   proc_freepagetable(oldpagetable, oldsz);
+
+  // Remap USYSCALL in the new page table.
+  if(mappages(p->pagetable, USYSCALL, PGSIZE,
+              (uint64)(p->usyscallpage), PTE_R | PTE_U) < 0){
+    goto bad;
+  }
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 

@@ -132,6 +132,15 @@ found:
     return 0;
   }
 
+  // Allocate a usyscall page (mapped later in userinit/kfork).
+  if((p->usyscallpage = kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  memset(p->usyscallpage, 0, PGSIZE);
+  ((struct usyscall *)p->usyscallpage)->pid = p->pid;
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -158,6 +167,10 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if(p->usyscallpage){
+    uvmunmap(p->pagetable, USYSCALL, 1, 1);
+    p->usyscallpage = 0;
+  }
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -223,7 +236,13 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
+  // map the usyscall page.
+  if(mappages(p->pagetable, USYSCALL, PGSIZE,
+              (uint64)(p->usyscallpage), PTE_R | PTE_U) < 0){
+    panic("userinit: mappages");
+  }
+
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -272,6 +291,16 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  // uvmcopy copied the parent's USYSCALL mapping into the child.
+  // Replace it with the child's own usyscall page (allocated in allocproc).
+  uvmunmap(np->pagetable, USYSCALL, 1, 0);  // don't free parent's page
+  if(mappages(np->pagetable, USYSCALL, PGSIZE,
+              (uint64)(np->usyscallpage), PTE_R | PTE_U) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
