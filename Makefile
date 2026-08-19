@@ -88,7 +88,7 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2
+CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2 -DLAB_SYSCALL
 
 ifdef LAB
 LABUPPER = $(shell echo $(LAB) | tr a-z A-Z)
@@ -198,7 +198,10 @@ UPROGS=\
 	$U/_sleep\
 	$U/_sixfive\
 	$U/_memdump\
-	$U/_find
+	$U/_find\
+	$U/_sandbox\
+	$U/_attack\
+	$U/_secret
 
 
 
