@@ -127,6 +127,7 @@ supercheck(char *end)
   }
 }
 
+// 验证 fork 时大页是否正确复制
 void
 superpg_fork()
 {
@@ -135,19 +136,21 @@ superpg_fork()
   printf("superpg_fork starting\n");
   testname = "superpg_fork";
   
+  // 1. 分配 2MB 内存（触发大页分配）
   char *end = sbrk(SZ);
   if (end == 0 || end == SBRK_ERROR)
     err("sbrk failed");
 
-  // check if parent has super pages
+  // check if parent has super pages｜2. 检查父进程是否有大页
   supercheck(end);
   if((pid = fork()) < 0) {
     err("fork");
   } else if(pid == 0) {
-    // check if child's address space has super pages
+    // check if child's address space has super pages ｜3. 检查子进程的地址空间是否有大页
     supercheck(end);
     exit(0);
   } else {
+    // 父进程：等待子进程结束
     int status;
     wait(&status);
     if (status != 0) {
@@ -156,7 +159,7 @@ superpg_fork()
   }
 
   // free super pages
-  sbrk(-SZ);
+  sbrk(-SZ);  // 收缩 2MB
   if((pid = fork()) < 0) {
     err("fork");
   } else if(pid == 0) {
@@ -174,6 +177,7 @@ superpg_fork()
   printf("superpg_fork: OK\n");  
 }
 
+// 测试大页是否释放
 void
 superpg_free()
 {
@@ -182,23 +186,25 @@ superpg_free()
   printf("superpg_free starting\n");
   testname = "superpg_free";
 
+  // 分配 2MB 
   char *end = sbrk(SZ);
   if (end == 0 || end == SBRK_ERROR)
     err("sbrk failed");
 
-  // free pages beyond a super page
-  char *a = sbrk(0);
-  uint64 s = SUPERPGROUNDDOWN((uint64) a);
-  sbrk(-((uint64) a-s));
-  a = sbrk(0);
+  // 对齐2MB边界
+  char *a = sbrk(0); // 获取当前堆顶
+  uint64 s = SUPERPGROUNDDOWN((uint64) a); // 向下对齐2MB
+  sbrk(-((uint64) a-s)); // 收缩到 2MB 边界
+  a = sbrk(0); // 重新获取堆顶
 
+  // 检测大页内最后两个 4KB 页的PTE是否相同
   pte_t pte1 = (pte_t) pgpte((void *) a-PGSIZE);
   pte_t pte2 = (pte_t) pgpte((void *) a-2*PGSIZE);
-  if (pte1 != pte2) {
+  if (pte1 != pte2) { // 如果相同，说明它们都在同一个大页中
     err("not a super page");
   }
   
-  // write to the last 8192-byte section of a super page
+  // 在大页内最后两个 4KB 页写入数据内容
   * (a - PGSIZE + 1) = '8';
   * (a - 2*PGSIZE + 1) = '9';
 
@@ -206,13 +212,16 @@ superpg_free()
   sbrk(-PGSIZE);
   a = sbrk(0);
 
+  // check if the content is still there
   if (*(a - PGSIZE + 1) != '9') {
     err("lost content after freeing part of super page");
   }
 
+  // 验证释放后的隔离性
   if((pid = fork()) < 0) {
     err("fork");
   } else if(pid == 0) {
+     // 子进程尝试访问父进程已释放的内存
      // the memory at address a shouldn't be in the child's address
      // space, since the parent freed it. The following reference
      // should result in page fault and the kernel should kill the
@@ -229,11 +238,13 @@ superpg_free()
     }
   }
 
+  // 验证所有 4KB页都被释放了
   pte1 = (pte_t) pgpte((void *) a);
   if(pte1 != 0) {
     err("pte for freed memory is valid");
   }
 
+  // 逐页释放并检查
   s = SUPERPGROUNDDOWN((uint64) a);
   for (; (uint64) a > s; a -= PGSIZE) {
     a = sbrk(-PGSIZE);

@@ -132,8 +132,8 @@ found:
     return 0;
   }
 
-  // Allocate a usyscall page (mapped later in userinit/kfork).
-  if((p->usyscallpage = kalloc()) == 0){
+  // An empty user page table. 分配用户页表
+  if((p->usyscallpage = (struct usyscall *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -167,10 +167,16 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // 释放用户内存
   if(p->usyscallpage){
+    // 为什么这里会设置为1，前面设置为0 ？ 
+    // - unmunmap这个函数中有个参数 - `do_free = 1`：解除页表映射 **并且调用 kfree 释放物理内存**
+    // - `do_free = 0`：**只删掉页表映射，不释放物理页**，物理页还在，别的地方还可以继续用
     uvmunmap(p->pagetable, USYSCALL, 1, 1);
     p->usyscallpage = 0;
   }
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -260,7 +266,7 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_U|PTE_W|PTE_R)) == 0) {
       return -1;
     }
   } else if(n < 0){
@@ -294,7 +300,7 @@ kfork(void)
 
   // uvmcopy copied the parent's USYSCALL mapping into the child.
   // Replace it with the child's own usyscall page (allocated in allocproc).
-  uvmunmap(np->pagetable, USYSCALL, 1, 0);  // don't free parent's page
+  uvmunmap(np->pagetable, USYSCALL, 1, 0);  // 不要释放父进程的物理页，只是解除映射
   if(mappages(np->pagetable, USYSCALL, PGSIZE,
               (uint64)(np->usyscallpage), PTE_R | PTE_U) < 0){
     freeproc(np);

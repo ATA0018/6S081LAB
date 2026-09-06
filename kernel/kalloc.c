@@ -23,11 +23,73 @@ struct {
   struct run *freelist;
 } kmem;
 
+#ifdef LAB_PGTBL
+#define NSUPER 32
+
+struct {
+  struct spinlock lock;
+  void *pages[NSUPER];
+  int nfree;
+} supermem;
+
+static uint64
+superbase(void)
+{
+  return PHYSTOP - (uint64)NSUPER * SUPERPGSIZE;
+}
+
+static void
+superinit(void)
+{
+  initlock(&supermem.lock, "super");
+  supermem.nfree = 0;
+  for(int i = 0; i < NSUPER; i++)
+    supermem.pages[supermem.nfree++] = (void*)(superbase() + (uint64)i * SUPERPGSIZE);
+}
+
+void *
+superalloc(void)
+{
+  void *p;
+
+  acquire(&supermem.lock);
+  if(supermem.nfree == 0)
+    p = 0;
+  else
+    p = supermem.pages[--supermem.nfree];
+  release(&supermem.lock);
+
+  if(p)
+    memset(p, 5, SUPERPGSIZE);
+  return p;
+}
+
+void
+superfree(void *pa)
+{
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (uint64)pa < superbase() || (uint64)pa >= PHYSTOP)
+    panic("superfree, pa is not aligned or out of range");
+
+  memset(pa, 1, SUPERPGSIZE);
+
+  acquire(&supermem.lock);
+  if(supermem.nfree >= NSUPER)
+    panic("superfree, no free pages");
+  supermem.pages[supermem.nfree++] = pa;
+  release(&supermem.lock);
+}
+#endif
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+#ifdef LAB_PGTBL
+  superinit();
+  freerange(end, (void*)superbase());
+#else
   freerange(end, (void*)PHYSTOP);
+#endif
 }
 
 void

@@ -361,9 +361,9 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PGSHIFT 12  // bits of offset within a page
 
 #ifdef LAB_PGTBL
-#define SUPERPGSIZE (2 * (1 << 20)) // bytes per page
-#define SUPERPGROUNDUP(sz)  (((sz)+SUPERPGSIZE-1) & ~(SUPERPGSIZE-1))
-#define SUPERPGROUNDDOWN(sz) (SUPERPGROUNDUP(sz)-SUPERPGSIZE)
+#define SUPERPGSIZE (2 * (1 << 20)) // bytes per page 1左移20位对应1MB，乘以2就是2MB
+#define SUPERPGROUNDUP(sz)  (((sz)+SUPERPGSIZE-1) & ~(SUPERPGSIZE-1)) // 2MB向上对齐
+#define SUPERPGROUNDDOWN(sz) (SUPERPGROUNDUP(sz)-SUPERPGSIZE) // 2MB向下对齐
 #endif
 
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
@@ -378,7 +378,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 
 
 #if defined(LAB_MMAP) || defined(LAB_PGTBL) || defined(LAB_COW)
-#define PTE_LEAF(pte) (((pte) & PTE_R) | ((pte) & PTE_W) | ((pte) & PTE_X))
+#define PTE_LEAF(pte) (((pte) & PTE_R) | ((pte) & PTE_W) | ((pte) & PTE_X)) // 判断是否是叶子节点
 #endif
 
 // shift a physical address to the right place for a PTE.
