@@ -149,3 +149,18 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
 }
+
+// Print a backtrace of the function call stack.
+void
+backtrace(void)
+{
+  uint64 fp = r_fp(); // 获取当前函数的栈指针
+  printf("backtrace:\n");
+  uint64 align_fp = PGROUNDDOWN(fp); // 将栈指针对齐,获取栈帧的起始地址
+  while(fp > align_fp){
+    uint64 sp = *(uint64 *)(fp - 8); // 获取栈帧中的返回地址
+    printf("%p\n", (void *)sp);
+    fp = *(uint64 *)(fp - 16); // 获取上一个栈帧的栈指针
+  }
+}
+

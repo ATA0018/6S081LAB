@@ -68,6 +68,8 @@ sys_pause(void)
   int n;
   uint ticks0;
 
+  backtrace(); // 打印当前函数的调用栈
+  
   argint(0, &n);
   if(n < 0)
     n = 0;

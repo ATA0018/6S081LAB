@@ -77,4 +77,108 @@ xv6 的页表：每个进程页表同时包含用户地址空间 + 全局内核�
 现实 Linux：是第一种思路，内核可以直接访问用户地址；但是内核开发中要非常小心指针校验，历史上大量漏洞就来自对用户指针的错误处理。xv6 作为教学系统，优先降低复杂度、减少安全 bug，牺牲一部分性能。
 
 Number Two: Backtrace.
+Question: For debugging it is often useful to have a backtrace: a list of the function calls on the stack above the point at which the error occurred. To help with backtraces, the compiler generates machine code that maintains a stack frame on the stack corresponding to each function in the current call chain. Each stack frame consists of the return address and a "frame pointer" to the caller's stack frame. Register s0 contains a pointer to the current stack frame (it actually points to the the address of the saved return address on the stack plus 8). Your backtrace should use the frame pointers to walk up the stack and print the saved return address in each stack frame. 
 
+In hints:
+``` c 
+// kernel/riscv.h
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+```
+
+Operations:
+```c
+// kernel/printf.c
+void
+backtrace(void)
+{
+  uint64 fp = r_fp();
+  uint64 stack_bottom = PGROUNDDOWN(fp);
+
+  while (fp > stack_bottom) {
+    uint64 ra = *(uint64 *)(fp - 8);
+    printf("%p\n", (void *)ra);
+    fp = *(uint64 *)(fp - 16);
+  }
+}
+
+// kernel/defs.h
+void            backtrace(void);
+
+// kernel/sysproc.c
+uint64
+sys_pause(void)
+{
+  int n;
+  uint ticks0;
+
+  backtrace(); // 打印当前函数的调用栈
+  
+  argint(0, &n);
+  if(n < 0)
+    n = 0;
+  acquire(&tickslock);
+  ticks0 = ticks;
+  while(ticks - ticks0 < n){
+    if(killed(myproc())){
+      release(&tickslock);
+      return -1;
+    }
+    sleep(&ticks, &tickslock);
+  }
+  release(&tickslock);
+  return 0;
+}
+```
+## 图解backtrace 的栈帧使用情况
+高地址
+        ┌──────────────┐
+        │ 调用者的帧    │
+        ├──────────────┤
+        │ 保存的 s0     │  ← s0       （指向调用者帧）
+        ├──────────────┤
+        │ 返回地址(ra)  │  ← s0 - 8   （低地址方向）
+        ├──────────────┤
+        │ 局部变量...   │  ← s0 - 16  （更低地址）
+        └──────────────┘
+低地址
+
+Note: backtrace()不要放在持有锁之外、不要放在 sleep 之后做对比
+`sleep()`会触发上下文切换，线程被切出去；当进程被时钟中断唤醒，从`sleep`返回继续执行 while 循环。
+如果你把`backtrace`放在`sleep(...)`的**后面**：此时打印的是**被唤醒恢复执行时的调用栈**，栈内容和进入 sys_pause 是一样的，因为内核栈帧没有销毁。
+
+为什么 sleep 做上下文切换，再次回来之后 backtrace 还能正常工作？
+答：上下文切换只是把线程换出 CPU，**内核栈完整保留所有栈帧 (fp、ra)**；进程重新调度回来继续在原来栈上执行，栈回溯链表完好。
+
+测试：
+1、make qemu 
+``` bash
+$ bttest
+backtrace:
+0x0000000080001e4a
+0x0000000080001d38
+0x0000000080001ac2
+0x0000003ffffff09c
+# 退出qemu
+$ riscv64-unknown-elf-addr2line -e kernel/kernel 
+# riscv64-unknown-elf-addr2line -e kernel/kernel << EOF（明亮跑完直接退出）
+ctrl + c复制
+0x0000000080001e4a
+0x0000000080001d38
+0x0000000080001ac2
+
+# You will look at the following text:
+/Users/yourmac/Desktop/A501/底层操作系统原理xv-6/xv6-labs-2025/kernel/sysproc.c:73
+/Users/yourmac/Desktop/A501/底层操作系统原理xv-6/xv6-labs-2025/kernel/syscall.c:141 (discriminator 1)
+/Users/yourmac/Desktop/A501/底层操作系统原理xv-6/xv6-labs-2025/kernel/trap.c:80
+
+# ctrl + D 退出 
+```
+
+Number Three: Alarm.
+Question: The Unix alarm system call sets a timer that will expire after a given number of seconds. When the timer expires, a signal is sent to the process. The signal is SIGALRM by default, but can be changed with the setitimer system call. The system call takes a timeval structure as an argument, which specifies the interval between timer expirations.
