@@ -339,6 +339,11 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
+
+// pagetable: 页表，用于虚拟地址到物理地址的映射
+// dstva: 目标虚拟地址（用户空间）
+// src: 源数据指针（内核空间）
+// len: 要复制的字节数
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
@@ -350,22 +355,22 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
   
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0) {
+    pa0 = walkaddr(pagetable, va0); // 获取虚拟地址对应的物理地址
+    if(pa0 == 0) { //如果物理地址不存在（页未映射），则调用vmfault进行页面故障处理
       if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
         return -1;
       }
     }
 
-    pte = walk(pagetable, va0, 0);
+    pte = walk(pagetable, va0, 0); // 获取虚拟地址对应的页表项
     // forbid copyout over read-only user text pages.
     if((*pte & PTE_W) == 0)
       return -1;
       
-    n = PGSIZE - (dstva - va0);
+    n = PGSIZE - (dstva - va0); // 计算当前页面剩余可用的字节数n
     if(n > len)
       n = len;
-    memmove((void *)(pa0 + (dstva - va0)), src, n);
+    memmove((void *)(pa0 + (dstva - va0)), src, n); // 使用memmove将数据从kernel space复制到user space对应的物理地址
 
     len -= n;
     src += n;
@@ -377,6 +382,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
+
+// pagetable: 用户空间的页表，用于验证用户地址的有效性
+// dst: 目标地址，在内核空间中
+// srcva: 源地址，在用户空间中
+// len: 要复制的字节数
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
@@ -402,10 +412,15 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   return 0;
 }
 
-// Copy a null-terminated string from user to kernel.
+// Copy a null-terminated string from user to kernel.（从用户空间安全地复制字符串到内核空间）
 // Copy bytes to dst from virtual address srcva in a given page table,
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
+
+// pagetable_t pagetable: 页表参数，用于地址转换和内存访问权限检查
+// char *dst: 目标缓冲区指针，位于内核空间
+// uint64 srcva: 源虚拟地址，位于用户空间
+// uint64 max: 最大复制字节数限制
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
@@ -417,10 +432,10 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
-    n = PGSIZE - (srcva - va0);
+    n = PGSIZE - (srcva - va0); // 获取当前页面剩余可用字节数
     if(n > max)
       n = max;
-
+    // 检查字符串
     char *p = (char *) (pa0 + (srcva - va0));
     while(n > 0){
       if(*p == '\0'){

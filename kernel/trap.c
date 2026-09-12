@@ -136,15 +136,17 @@ void
 kerneltrap()
 {
   int which_dev = 0;
-  uint64 sepc = r_sepc();
-  uint64 sstatus = r_sstatus();
-  uint64 scause = r_scause();
+  uint64 sepc = r_sepc(); // the saved program counter, to return to user space
+  uint64 sstatus = r_sstatus(); // the saved status register
+  uint64 scause = r_scause(); // the saved scause
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
-  if(intr_get() != 0)
+  if(intr_get() != 0) // 检查中断是否被禁用（intr_get() != 0表示中断已启用）
     panic("kerneltrap: interrupts enabled");
-
+    
+  // 调用devintr()函数处理中断/异常，返回设备编号
+  // 如果devintr()返回0，表示未知来源的中断/异常，打印信息并panic
   if((which_dev = devintr()) == 0){
     // interrupt or trap from an unknown source
     printf("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(), r_stval());
