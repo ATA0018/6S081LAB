@@ -131,6 +131,12 @@ found:
     release(&p->lock);
     return 0;
   }
+  // ===== alarm lab =====
+  p->alarm_interval = 0;
+  p->alarm_handler = 0;
+  p->alarm_ticks = 0;
+  p->alarm_tf = 0;   // 懒分配，这里不分配 kalloc
+  p->alarm_handling = 0;
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -158,6 +164,16 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // ===== alarm lab =====
+  if(p->alarm_tf)
+    kfree((void*)p->alarm_tf);
+  p->alarm_tf = 0;
+  p->alarm_interval = 0;
+  p->alarm_handler  = 0;
+  p->alarm_ticks    = 0;
+  p->alarm_handling = 0;
+  
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -275,6 +291,13 @@ kfork(void)
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
+
+  // ===== alarm lab: 子进程不继承 alarm =====
+  np->alarm_interval = 0;
+  np->alarm_handler  = 0;
+  np->alarm_ticks    = 0;
+  np->alarm_handling = 0;
+  np->alarm_tf       = 0;   // 关键：断开与父进程共享的指针
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;

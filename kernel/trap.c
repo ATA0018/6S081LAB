@@ -81,9 +81,20 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  // if(which_dev == 2)
+  //   yield();
+  if(which_dev == 2){
+    // ===== alarm lab =====
+    if(p->alarm_interval != 0 && !p->alarm_handling){
+      p->alarm_ticks++;
+      if(p->alarm_ticks >= p->alarm_interval){
+        p->alarm_handling = 1;
+        *p->alarm_tf = *p->trapframe;              // 保存原始现场
+        p->trapframe->epc = p->alarm_handler;      // 返回用户态跳 handler
+      }
+    }
     yield();
-
+  }
   prepare_return();
 
   // the user page table to switch to, for trampoline.S
@@ -144,7 +155,7 @@ kerneltrap()
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0) // 检查中断是否被禁用（intr_get() != 0表示中断已启用）
     panic("kerneltrap: interrupts enabled");
-    
+
   // 调用devintr()函数处理中断/异常，返回设备编号
   // 如果devintr()返回0，表示未知来源的中断/异常，打印信息并panic
   if((which_dev = devintr()) == 0){

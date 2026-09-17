@@ -104,4 +104,10 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  int alarm_interval;          // sigalarm 设置的 tick 间隔，0 = 关闭
+  uint64 alarm_handler;        // 用户注册的回调函数地址
+  int alarm_ticks;             // 当前累计消耗的 CPU tick
+  struct trapframe *alarm_tf;  // 保存被打断时的原始用户上下文
+  int alarm_handling;          // 是否正在执行 handler，防止嵌套
 };
