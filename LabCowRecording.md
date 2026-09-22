@@ -321,26 +321,6 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
 ### 4.1 统一复制函数（vm.c）
 
 ```c
-// 返回 0 成功，-1 失败（无内存）
-int cowfault(pagetable_t pagetable, uint64 va) {
-    pte_t *pte = walk(pagetable, va, 0);
-    if (pte == 0 || (*pte & PTE_V) == 0) return -1;
-
-    uint64 pa = PTE2PA(*pte);
-    unit64 flags = PTE_FLAGS(*pte);
-    if ((flags & PTE_COW) == 0) return -1;   // 不是 COW 页
-
-    char *mem = kalloc();
-    if (mem == 0) return -1;                 // 无空闲内存 -> 杀进程
-
-    memmove(mem, (char*)pa, PGSIZE);
-    unit64 newflags = (flags | PTE_W) & ~PTE_COW;
-    *pte = PA2PTE(mem) | newflags;
-
-    kfree((void*)pa);                        // 旧页引用 -1
-    return 0;
-}
-
 int cowfault(pagetable_t pagetable, uint64 va) {
     pte_t *pte;
     uint64 pa;
@@ -455,33 +435,7 @@ void usertrap(void) {
 //   }
 //   return 0;
 // }
-int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
-    uint64 n, va0, pa0;
 
-    while (len > 0) {
-        va0 = PGROUNDDOWN(dstva);
-        if (va0 >= MAXVA) return -1;
-
-        pte_t *pte = walk(pagetable, va0, 0);
-        if (pte == 0 || (*pte & PTE_V) == 0) return -1;
-
-        // 遇到 COW 页，先复制（与 vmfault 同一套逻辑）
-        if ((*pte & PTE_COW) && (*pte & PTE_U)) {
-            if (cowfault(pagetable, va0) < 0)
-                return -1;
-        }
-
-        pa0 = PTE2PA(*pte);
-        n = PGSIZE - (dstva - va0);
-        if (n > len) n = len;
-        memmove((void*)(pa0 + (dstva - va0)), src, n);
-
-        len -= n;
-        src += n;
-        dstva = va0 + PGSIZE;
-    }
-    return 0;
-}
 int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
     uint64 n, va0, pa0;
     pte_t *pte;
