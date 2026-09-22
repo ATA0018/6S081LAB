@@ -189,26 +189,26 @@ uvmcreate()
 // Remove npages of mappings starting from va. va must be
 // page-aligned. It's OK if the mappings don't exist.
 // Optionally free the physical memory.
-void
-uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
-{
-  uint64 a;
-  pte_t *pte;
+void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free) {
+    uint64 a;
+    pte_t *pte;
 
-  if((va % PGSIZE) != 0)
-    panic("uvmunmap: not aligned");
+    if ((va % PGSIZE) != 0)
+        panic("uvmunmap: not aligned");
 
-  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
-      continue;   
-    if((*pte & PTE_V) == 0)  // has physical page been allocated?
-      continue;
-    if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+    for (a = va; a < va + npages * PGSIZE; a += PGSIZE) {
+        if ((pte = walk(pagetable, a, 0)) == 0)
+            continue;                 // lazy：中间页表可能不存在
+        if ((*pte & PTE_V) == 0)
+            continue;
+        if (PTE_FLAGS(*pte) == PTE_V)
+            panic("uvmunmap: not a leaf");
+        if (do_free) {
+            uint64 pa = PTE2PA(*pte);
+            kfree((void*)pa);
+        }
+        *pte = 0;
     }
-    *pte = 0;
-  }
 }
 
 // Allocate PTEs and physical memory to grow a process from oldsz to
@@ -293,35 +293,41 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
-int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
-{
+int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
   pte_t *pte;
   uint64 pa, i;
-  uint flags;
-  char *mem;
+  uint64 flags;
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      continue;   // page table entry hasn't been allocated
-    if((*pte & PTE_V) == 0)
-      continue;   // physical page hasn't been allocated
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
-    }
+  for (i = 0; i < sz; i += PGSIZE) {
+      if ((pte = walk(old, i, 0)) == 0)
+        continue;                       // lazy：页表项可能尚未分配
+      if ((*pte & PTE_V) == 0)
+        continue;
+
+      pa = PTE2PA(*pte);
+      flags = PTE_FLAGS(*pte);
+
+      // 原本可写 -> COW：清 PTE_W、打 PTE_COW、双向只读
+      if (flags & PTE_W) {
+          flags = (flags & ~PTE_W) | PTE_COW;
+          *pte = PA2PTE(pa) | flags;   // 改父进程 PTE
+      }
+      // 原本只读（如文本段）：保持只读，不加 PTE_COW
+
+      kref((void*)pa);                  // 引用 +1
+      if (mappages(new, i, PGSIZE, pa, flags) != 0) {
+          kfree((void*)pa);
+          goto err;
+      }
   }
+  sfence_vma();                         // 父进程 PTE 权限已变，刷新 TLB
   return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+  err:
+      uvmunmap(new, 0, i / PGSIZE, 1);
+      return -1;
 }
+
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
@@ -339,39 +345,49 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
-int
-copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
-{
-  uint64 n, va0, pa0;
-  pte_t *pte;
+int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
+    uint64 n, va0, pa0;
+    pte_t *pte;
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(dstva);
-    if(va0 >= MAXVA)
-      return -1;
-  
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
-        return -1;
-      }
+    while (len > 0) {
+        va0 = PGROUNDDOWN(dstva);
+        if (va0 >= MAXVA)
+          return -1;
+
+        pte = walk(pagetable, va0, 0);
+        if (pte == 0 || (*pte & PTE_V) == 0) {
+          // lazy 分配尚未建映射
+          if (vmfault(pagetable, va0, 0) == 0)
+            return -1;
+          pte = walk(pagetable, va0, 0);
+          if (pte == 0 || (*pte & PTE_V) == 0)
+            return -1;
+        }
+
+        if ((*pte & PTE_U) == 0)
+          return -1;
+
+        // 遇到 COW 页，先复制（与页错误路径同一套逻辑）
+        if (*pte & PTE_COW) {
+            if (cowfault(pagetable, va0) < 0)
+                return -1;
+        }
+
+        // 禁止写只读用户页（如文本段）
+        if ((*pte & PTE_W) == 0)
+          return -1;
+
+        pa0 = PTE2PA(*pte);
+        n = PGSIZE - (dstva - va0);
+        if (n > len)
+          n = len;
+        memmove((void*)(pa0 + (dstva - va0)), src, n);
+
+        len -= n;
+        src += n;
+        dstva = va0 + PGSIZE;
     }
-
-    pte = walk(pagetable, va0, 0);
-    // forbid copyout over read-only user text pages.
-    if((*pte & PTE_W) == 0)
-      return -1;
-      
-    n = PGSIZE - (dstva - va0);
-    if(n > len)
-      n = len;
-    memmove((void *)(pa0 + (dstva - va0)), src, n);
-
-    len -= n;
-    src += n;
-    dstva = va0 + PGSIZE;
-  }
-  return 0;
+    return 0;
 }
 
 // Copy from user to kernel.
@@ -449,6 +465,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
 // out of physical memory, and physical address if successful.
+// 访问**还没有任何 PTE 映射**的虚拟地址
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
@@ -472,6 +489,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   return mem;
 }
 
+// 用于检查给定的虚拟地址（va）是否在页表中已经被映射。
 int
 ismapped(pagetable_t pagetable, uint64 va)
 {
@@ -483,4 +501,38 @@ ismapped(pagetable_t pagetable, uint64 va)
     return 1;
   }
   return 0;
+}
+
+// 写时复制：访问**已经存在有效 PTE，但 PTE 带有 PTE_COW 标记、且发生写访问**
+int cowfault(pagetable_t pagetable, uint64 va) {
+    pte_t *pte;
+    uint64 pa;
+    uint64 flags;
+    char *mem;
+
+    va = PGROUNDDOWN(va);
+    pte = walk(pagetable, va, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0) return -1;
+    if ((*pte & PTE_U) == 0) return -1;
+
+    flags = PTE_FLAGS(*pte);
+    if ((flags & PTE_COW) == 0) return -1;                            // 不是 COW 页
+
+    pa = PTE2PA(*pte);
+
+    // 唯一引用：无需复制，直接恢复可写
+    if (krefcount((void*)pa) == 1) {
+      *pte = PA2PTE(pa) | ((flags | PTE_W) & ~PTE_COW);
+      sfence_vma();
+      return 0;
+    }
+
+    mem = kalloc();
+    if (mem == 0) return -1;                            // 无空闲内存 -> 杀进程
+
+    memmove(mem, (char*)pa, PGSIZE);
+    *pte = PA2PTE((uint64)mem) | ((flags | PTE_W) & ~PTE_COW);
+    kfree((void*)pa);                       // 旧页引用 -1
+    sfence_vma();
+    return 0;
 }

@@ -68,9 +68,27 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    // load/store page fault: lazy 分配或 COW
+    uint64 va = r_stval();
+    if (va >= MAXVA || va >= p->sz) {
+      setkilled(p);
+    } else {
+      pte_t *pte = walk(p->pagetable, va, 0);
+      if (pte && (*pte & PTE_V)) {
+        // 已映射：写 COW 页则复制，否则非法
+        if (r_scause() == 15 && (*pte & PTE_COW)) {
+          if (cowfault(p->pagetable, va) < 0)
+            setkilled(p);
+        } else {
+          setkilled(p);
+        }
+      } else {
+        // 未映射：尝试 lazy 分配
+        if (vmfault(p->pagetable, va, 0) == 0)
+          setkilled(p);
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());

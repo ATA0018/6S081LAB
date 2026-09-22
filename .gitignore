@@ -23,7 +23,9 @@ ph
 barrier
 /lab-*.json
 .DS_Store
-*.dSYM
+*.dSYM  
 *.pcap
 TAGS
 
+.vscode/*
+.mimocode/*
