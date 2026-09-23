@@ -178,7 +178,9 @@ void kfree(void *pa) {
     int last = (refcnt[idx] == 0);
     release(&refcnt_lock);
 
-    if (!last) return;   // 还有别人引用，不回收
+    if (!last)
+      return;                   // 还有引用，不回收
+    freepage(pa);               // 归零才真正挂回 freelist
 
     memset(pa, 1, PGSIZE);
     struct run *r = (struct run*)pa;
