@@ -65,14 +65,21 @@ kfree(void *pa) {
   freepage(pa);               // 归零才真正挂回 freelist
 }
 
-// 使用原子操作实现kref
+// 供 uvmcopy / vmfault 显式加引用
 void kref(void *pa) {
-    refcnt[PA2IDX(pa)]++;  // 假设refcnt是atomic类型
+    acquire(&refcnt_lock);
+    refcnt[PA2IDX(pa)]++;
+    release(&refcnt_lock);
 }
 
-// 使用原子操作实现krefcount
-int krefcount(void *pa) {
-    return refcnt[PA2IDX(pa)];  // 直接返回原子值
+int
+krefcount(void *pa)
+{
+  int c;
+  acquire(&refcnt_lock);
+  c = refcnt[PA2IDX(pa)];
+  release(&refcnt_lock);
+  return c;
 }
 
 // Allocate one 4096-byte page of physical memory.
