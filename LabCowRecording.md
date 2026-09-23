@@ -208,31 +208,23 @@ kfree(void *pa) {
   freepage(pa);               // 归零才真正挂回 freelist
 }
 
-// 原本的操作
-// void kref(void *pa)
-// {
-//     acquire(&refcnt_lock);
-//     refcnt[PA2IDX(pa)]++;
-//     release(&refcnt_lock);
-// }
-/**
- * 引用一次物理地址
- * @param pa 物理地址指针
- */
-// 使用原子操作实现kref
-void kref(void *pa) {
-    refcnt[PA2IDX(pa)]++;  // 假设refcnt是atomic类型
+// 引用一次物理地址
+void kref(void *pa)
+{
+    acquire(&refcnt_lock);
+    refcnt[PA2IDX(pa)]++;
+    release(&refcnt_lock);
 }
 
-// 使用原子操作实现krefcount
-/**
- * 获取物理地址对应的引用计数
- * @param pa 物理地址指针
- * @return 返回该物理地址对应的引用计数值
- */
-int krefcount(void *pa) {
-    return refcnt[PA2IDX(pa)];  // 直接返回原子值
+// 使用原子操作实现kref
+void krefcount(void *pa) {
+  int c;
+  acquire(&refcnt_lock);
+  c = refcnt[PA2IDX(pa)];
+  release(&refcnt_lock);
+  return c;
 }
+
 
 ```
 
