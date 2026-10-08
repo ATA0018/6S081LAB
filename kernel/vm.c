@@ -313,7 +313,6 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
           *pte = PA2PTE(pa) | flags;   // 改父进程 PTE
       }
       // 原本只读（如文本段）：保持只读，不加 PTE_COW
-
       kref((void*)pa);                  // 引用 +1
       if (mappages(new, i, PGSIZE, pa, flags) != 0) {
           kfree((void*)pa);

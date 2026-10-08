@@ -119,7 +119,7 @@ void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
+  p = (char*)PGROUNDUP((uint64)pa_start); // 向上取整是是为了找到第一个页（0x1001的下一个页0x2000, 防止中间的内容被覆盖）
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     freepage(p);          // 初始化：直接挂入，refcnt 保持 0
 }
@@ -130,11 +130,11 @@ freepage(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP) // pa < end: 物理地址不能指向内核本身已使用的内存区域
     panic("freepage");
   memset(pa, 1, PGSIZE);
 
-  r = (struct run*)pa;
+  r = (struct run*)pa; // 每个 run 结构体包含指向下一个可用页的指针，将空闲页连接成一个链表，便于管理
 
   acquire(&kmem.lock);
   r->next = kmem.freelist;
@@ -163,35 +163,28 @@ void *kalloc(void) {
     }
     return (void*)r;
 }
+// void *kalloc(void) { 
+//     struct run *r;
+//     acquire(&kmem.lock);
+//     r = kmem.freelist;
+
+//     if (r) { 这里是不行的，要是r = null, 就不会释放锁了。 要是放在外面就是double release lock.
+//       kmem.freelist = r->next;
+//       release(&kmem.lock);
+//       memset((char*)r, 5, PGSIZE);
+
+//       acquire(&refcnt_lock);
+//       refcnt[PA2IDX(r)] = 1;
+//       release(&refcnt_lock);
+//     }
+//     return (void*)r;
+// }
 
 ### 2.4 kfree：解除一次引用，归零才回收
 
 ```c
-void kfree(void *pa) {
-    if (((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-        panic("kfree");
-
-    acquire(&refcnt_lock);
-    int idx = PA2IDX(pa);
-    if (refcnt[idx] < 1) panic("kfree refcnt");
-    refcnt[idx]--;
-    int last = (refcnt[idx] == 0);
-    release(&refcnt_lock);
-
-    if (!last)
-      return;                   // 还有引用，不回收
-    freepage(pa);               // 归零才真正挂回 freelist
-
-    memset(pa, 1, PGSIZE);
-    struct run *r = (struct run*)pa;
-    acquire(&kmem.lock);
-    r->next = kmem.freelist;
-    kmem.freelist = r;
-    release(&kmem.lock);
-}
-
-void 
-kfree(void *pa) {
+void kfree(void *pa)
+{
   if (((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
       panic("kfree");
 
@@ -218,7 +211,6 @@ void kref(void *pa)
     release(&refcnt_lock);
 }
 
-// 使用原子操作实现kref
 void krefcount(void *pa) {
   int c;
   acquire(&refcnt_lock);
@@ -285,8 +277,8 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
           flags = (flags & ~PTE_W) | PTE_COW;
           *pte = PA2PTE(pa) | flags;   // 改父进程 PTE
       }
-      // 原本只读（如文本段）：保持只读，不加 PTE_COW
 
+      // 原本只读（如文本段）：保持只读，不加 PTE_COW
       kref((void*)pa);                  // 引用 +1
       if (mappages(new, i, PGSIZE, pa, flags) != 0) {
           kfree((void*)pa);
@@ -345,7 +337,7 @@ int cowfault(pagetable_t pagetable, uint64 va) {
     if (mem == 0)
       return -1;                            // 无空闲内存 -> 杀进程
 
-    memmove(mem, (char*)pa, PGSIZE);
+    memmove(mem, (char*)pa, PGSIZE); // 复制内存给子进程
     *pte = PA2PTE((uint64)mem) | ((flags | PTE_W) & ~PTE_COW);
     kfree((void*)pa);                       // 旧页引用 -1
     sfence_vma();
@@ -366,7 +358,7 @@ void usertrap(void) {
     } else {
       pte_t *pte = walk(p->pagetable, va, 0);
       if (pte && (*pte & PTE_V)) {
-        // 已映射：写 COW 页则复制，否则非法
+        // 已映射：写 COW 页则复制，否则非法（尝试写入内容，被拒绝而引发page fault。）
         if (r_scause() == 15 && (*pte & PTE_COW)) {
           if (cowfault(p->pagetable, va) < 0) setkilled(p);
         } else {
@@ -429,6 +421,12 @@ void usertrap(void) {
 //   }
 //   return 0;
 // }
+/*
+pagetable_t pagetable: 父进程页表
+uint64 dstva: 用户页虚拟地址
+char *src: 内核页地址
+uint64 len: 长度
+*/
 
 int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
     uint64 n, va0, pa0;
@@ -444,7 +442,7 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
           // lazy 分配尚未建映射
           if (vmfault(pagetable, va0, 0) == 0)
             return -1;
-          pte = walk(pagetable, va0, 0);
+          pte = walk(pagetable, va0, 0); // 再次查找页表项，然后检查
           if (pte == 0 || (*pte & PTE_V) == 0)
             return -1;
         }
@@ -458,7 +456,7 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
                 return -1;
         }
 
-        // 禁止写只读用户页（如文本段）
+        // 禁止写，只读用户页（如文本段）
         if ((*pte & PTE_W) == 0)
           return -1;
 
@@ -487,20 +485,7 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
 ## 六、解除映射时正确减引用（kernel/vm.c: uvmunmap）
 
 ```c
-// if((va % PGSIZE) != 0)
-//     panic("uvmunmap: not aligned");
 
-//   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-//     if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
-//       continue;   
-//     if((*pte & PTE_V) == 0)  // has physical page been allocated?
-//       continue;
-//     if(do_free){
-//       uint64 pa = PTE2PA(*pte);
-//       kfree((void*)pa);
-//     }
-//     *pte = 0;
-//   }
 void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free) {
     uint64 a;
     pte_t *pte;
