@@ -27,3 +27,5 @@ barrier
 *.pcap
 TAGS
 
+.mimocode/*
+.vscode/*

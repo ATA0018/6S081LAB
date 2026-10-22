@@ -53,7 +53,7 @@ endif
 
 ifeq ($(LAB),net)
 OBJS += \
-	$K/e1000.o \
+	$K/tulip.o \
 	$K/net.o \
 	$K/pci.o
 endif
