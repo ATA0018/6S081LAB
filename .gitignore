@@ -27,3 +27,6 @@ barrier
 *.pcap
 TAGS
 /fs.img.bk
+
+.vscode/*
+.mimocode/*
