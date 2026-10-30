@@ -352,3 +352,182 @@ xv6 的“直接块 + 一级间接 + 双重间接”是早期 Unix（如 V7、ex
 - 缺点：固定层级限制了最大文件大小；大文件会产生大量间接块，随机访问要多次读盘；删除/截断需要遍历整棵索引树；对超大文件和碎片化不友好。
 
 现代 Linux 文件系统（ext4、xfs、btrfs）改用 **extent（区段）** 或 **B 树** 来记录“逻辑块区间 → 物理块区间”的映射，不再为每个数据块保存一个指针，因此支持更大的文件、更少的元数据开销和更好的空间局部性。但 xv6 这套多级索引仍然是理解“逻辑块号如何映射到磁盘块”的最好起点，也是文件系统课程实验的核心。
+
+---
+
+## 7. xv6 Lab：实现 symlink 系统调用
+
+2026年10月30日
+
+### 7.1 目标
+
+实现：
+
+```c
+int symlink(const char *target, const char *path);
+```
+
+在路径 `path` 上创建一个符号链接，链接内容（目标路径）是字符串 `target`。要点：
+
+- `target` **不需要存在**，`symlink()` 只负责把字符串存起来；
+- 返回 `0` 表示成功，`-1` 表示失败；
+- `open(path, ...)` 默认要**跟随**符号链接，直到最终的非链接文件；
+- `open(path, O_NOFOLLOW)` 打开链接本身，不跟随；
+- 链接成环或层数过深时 `open` 返回错误（可用固定深度阈值，例如 10）；
+- `link`、`unlink` 等系统调用**不跟随**符号链接，操作链接本身。
+
+### 7.2 系统调用的“接线”
+
+新增一个系统调用需要改这些地方：
+
+| 文件 | 改动 |
+| --- | --- |
+| `kernel/stat.h` | `#define T_SYMLINK 4` |
+| `kernel/fcntl.h` | `#define O_NOFOLLOW 0x800` |
+| `kernel/syscall.h` | `#define SYS_symlink 22` |
+| `kernel/syscall.c` | `extern uint64 sys_symlink(void);` + `[SYS_symlink] sys_symlink` |
+| `kernel/sysfile.c` | 实现 `sys_symlink()` |
+| `user/usys.pl` | `entry("symlink");` |
+| `user/user.h` | `int symlink(const char*, const char*);` |
+| `Makefile` | 把 `_symlinktest` 加入 `UPROGS` |
+
+`O_NOFOLLOW` 选 `0x800`，不能和已有的 `O_RDONLY(0x000)`、`O_WRONLY(0x001)`、`O_RDWR(0x002)`、`O_CREATE(0x200)`、`O_TRUNC(0x400)` 重叠。
+
+### 7.3 目标路径存在哪里
+
+符号链接本质上是一个“内容为目标路径字符串”的特殊文件。因此可以直接复用 inode 的数据块：
+
+- inode 类型设为 `T_SYMLINK`；
+- 用 `writei()` 把 `target` 写进 inode 的第 0 个字节开始的数据区；
+- 文件大小 `ip->size` 自然等于目标路径长度。
+
+```c
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  int len;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+  len = strlen(target);
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  // create() 返回的 inode 已经加锁
+  if(writei(ip, 0, (uint64)target, 0, len) != len){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+```
+
+注意：
+
+- `create()` 成功时返回的是**已加锁**的 inode，必须 `iunlockput()`；
+- 所有文件系统操作放在 `begin_op()/end_op()` 事务里；
+- `target` 不存在完全没关系，因为这里只是写字符串，没有做任何路径解析。
+
+### 7.4 open 如何跟随符号链接
+
+在 `sys_open()` 的非 `O_CREATE` 分支里，拿到并锁住 inode 后判断：
+
+```c
+ilock(ip);
+
+if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+  for(int i = 0; i < 10; i++){
+    char target[MAXPATH];
+    int len;
+
+    // 读出链接内容
+    if((len = readi(ip, 0, (uint64)target, 0, MAXPATH-1)) <= 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    target[len] = '\0';
+    iunlockput(ip);              // 先放掉当前链接 inode
+
+    if((ip = namei(target)) == 0){ // 目标不存在 -> open 失败
+      end_op();
+      return -1;
+    }
+    ilock(ip);
+    if(ip->type != T_SYMLINK)
+      break;                     // 已到普通文件
+  }
+
+  if(ip->type == T_SYMLINK){
+    // 跟随 10 层后仍是链接：视为成环或过深
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+}
+
+if(ip->type == T_DIR && omode != O_RDONLY){ ... }
+```
+
+关键点：
+
+1. **先解锁再 namei**：如果链接指向自己，持有旧 inode 锁再去 `namei` 可能死锁；`iunlockput()` 后再解析是安全的。
+2. **深度限制**：每跟随一层循环一次，最多 10 层。环（`b -> a -> b`）会在 10 次后仍为 `T_SYMLINK`，返回 `-1`。
+3. **`O_NOFOLLOW`**：条件不成立，直接打开链接 inode 本身。此时 `fstat` 看到的是 `T_SYMLINK`，`read` 读到的是目标路径字符串。
+4. **目标不存在**：`namei(target) == 0`，`open` 返回 `-1`。
+5. **`O_TRUNC`**：原逻辑只对 `T_FILE` 截断，符号链接不会被误截断。
+
+### 7.5 为什么其他系统调用不需要改
+
+- `sys_link()` 用 `namei(old)` 找到 inode 后直接增加 `nlink`。`namei()` 本身**不解析符号链接**，所以 `link` 链接的是符号链接 inode 本身。
+- `sys_unlink()` 用 `nameiparent()` + `dirlookup()` 找到目录项，删除的也是链接 inode 本身，不会动目标文件。
+- `stat()` 走 `namei()`，同样不跟随；测试里的 `stat_slink()` 则是通过 `open(..., O_NOFOLLOW)` + `fstat()` 观察链接本身。
+
+这与 POSIX 的语义一致：只有显式要求“打开/执行”的路径解析（如 `open`）才跟随链接。
+
+### 7.6 测试
+
+```sh
+python3 grade-lab-fs symlink
+```
+
+本次结果：
+
+```
+== Test running symlinktest == (5.7s)
+== Test   symlinktest: symlinks ==
+  symlinktest: symlinks: OK
+== Test   symlinktest: concurrent symlinks ==
+  symlinktest: concurrent symlinks: OK
+```
+
+测试覆盖了：
+
+- 普通文件 → 符号链接的读写；
+- `O_NOFOLLOW` 打开链接本身并检查 `st.type == T_SYMLINK`；
+- 删除目标后打开链接失败；
+- 循环链接 `a -> b -> a` 必须失败；
+- 指向不存在文件的 `symlink()` 必须成功；
+- 四层链接 `1 -> 2 -> 3 -> 4` 的递归跟随；
+- 大量符号链接共存；
+- 两个进程并发创建/删除同一个链接。
+
+### 7.7 常见坑
+
+1. **`create()` 返回的 inode 已加锁**：忘记 `iunlockput()` 会死锁或泄漏引用。
+2. **`readi()` 之后忘记补 `'\0'`**：`target` 不是 C 字符串，`namei()` 会读越界。
+3. **跟随链接时一直持有旧 inode 锁**：自环场景可能死锁；应先 `iunlockput()` 再 `namei()`。
+4. **忘记深度限制**：循环链接会让 `open` 无限递归/循环。
+5. **`O_NOFOLLOW` 与已有 flag 冲突**：必须选一个未使用的 bit。
+6. **改了 `UPROGS` 但没有重建 `fs.img`**：`symlinktest` 不会被放进镜像，shell 里会提示找不到命令；`make` 通常会自动重建，必要时删除 `fs.img`。
+7. **在 `begin_op()` 之后提前 `return` 忘记 `end_op()`**：事务无法提交，文件系统会卡住。上面每个失败路径都成对调用了 `end_op()`。

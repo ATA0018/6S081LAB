@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+static struct inode* create(char*, short, short, short);
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -167,6 +169,36 @@ bad:
   iunlockput(ip);
   end_op();
   return -1;
+}
+
+// Create a symbolic link at path that refers to target.
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  int len;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+  len = strlen(target);
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  // Store the target path in the symlink's data blocks.
+  if(writei(ip, 0, (uint64)target, 0, len) != len){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
 }
 
 // Is the directory dp empty except for "." and ".." ?
@@ -328,6 +360,37 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+
+    // Follow symbolic links, unless O_NOFOLLOW was specified.
+    if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+      for(int i = 0; i < 10; i++){
+        char target[MAXPATH];
+        int len;
+
+        if((len = readi(ip, 0, (uint64)target, 0, MAXPATH-1)) <= 0){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        target[len] = '\0';
+        iunlockput(ip);
+
+        if((ip = namei(target)) == 0){
+          end_op();
+          return -1;
+        }
+        ilock(ip);
+        if(ip->type != T_SYMLINK)
+          break;
+      }
+      if(ip->type == T_SYMLINK){
+        // Too many levels of symbolic links (a cycle or too deep).
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
+
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
