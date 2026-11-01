@@ -1,0 +1,5 @@
+# xv6 builds with -DLAB_MMAP (see conf/lab.mk and Makefile).
+# Without this, clangd won't see PROT_READ / MAP_SHARED / size_t etc.
+CompileFlags:
+  Add:
+    - -DLAB_MMAP

@@ -68,9 +68,22 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
+  } else if(r_scause() == 15 || r_scause() == 13){
+    // Page fault: lazily allocate a heap page or an mmap page.
+    uint64 va = r_stval();
+    int read = (r_scause() == 13);
+    uint64 pa;
+
+    if(va >= p->sz)
+      pa = mmapfault(va, read);
+    else
+      pa = vmfault(p->pagetable, va, read);
+
+    if(pa == 0){
+      printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+      setkilled(p);
+    }
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());

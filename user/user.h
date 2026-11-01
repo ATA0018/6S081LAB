@@ -29,6 +29,8 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+void *mmap(void*, uint64, int, int, int, uint64);
+int munmap(void*, uint64);
 #ifdef LAB_NET
 int bind(uint16);
 int unbind(uint16);

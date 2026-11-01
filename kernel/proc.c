@@ -125,6 +125,9 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  memset(p->vmas, 0, sizeof(p->vmas));
+  p->mmap_top = MMAPBASE;
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -168,6 +171,8 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  memset(p->vmas, 0, sizeof(p->vmas));
+  p->mmap_top = MMAPBASE;
   p->state = UNUSED;
 }
 
@@ -273,6 +278,15 @@ kfork(void)
   }
   np->sz = p->sz;
 
+  // Copy mmap regions; the child gets its own reference to each file.
+  for(i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      np->vmas[i] = p->vmas[i];
+      np->vmas[i].file = filedup(p->vmas[i].file);
+    }
+  }
+  np->mmap_top = p->mmap_top;
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -327,6 +341,9 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // Unmap mmap regions, writing back shared pages.
+  vmaexit(p);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

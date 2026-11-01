@@ -57,3 +57,7 @@
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+
+// mmap regions are allocated upward from here, well above the
+// heap and stack but below TRAPFRAME.
+#define MMAPBASE 0x40000000L

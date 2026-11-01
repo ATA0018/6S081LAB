@@ -152,6 +152,10 @@ void            argaddr(int, uint64 *);
 int             fetchstr(uint64, char*, int);
 int             fetchaddr(uint64, uint64*);
 void            syscall();
+uint64          sys_mmap(void);  // lab mmap.
+uint64          sys_munmap(void);
+uint64          mmapfault(uint64, int);
+void            vmaexit(struct proc*);
 
 // trap.c
 extern uint     ticks;
